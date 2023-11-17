@@ -5,6 +5,7 @@ use parking_lot::RwLock;
 use socket2::{Domain, Protocol, Type};
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, SocketAddrV4, SocketAddrV6};
+use std::os::fd::{AsRawFd, RawFd};
 use std::str::FromStr;
 
 use crate::device::{AllowedIps, Error};
@@ -105,7 +106,7 @@ impl Peer {
         &self,
         port: u16,
         #[allow(unused)] fwmark: Option<u32>,
-    ) -> Result<socket2::Socket, Error> {
+    ) -> Result<RawFd, Error> {
         let mut endpoint = self.endpoint.write();
 
         if endpoint.conn.is_some() {
@@ -139,9 +140,9 @@ impl Peer {
             endpoint=?endpoint.addr.unwrap()
         );
 
-        endpoint.conn = Some(udp_conn.try_clone().unwrap());
-
-        Ok(udp_conn)
+        let udp_conn_fd = udp_conn.as_raw_fd();
+        endpoint.conn = Some(udp_conn);
+        Ok(udp_conn_fd)
     }
 
     pub fn is_allowed_ip<I: Into<IpAddr>>(&self, addr: I) -> bool {

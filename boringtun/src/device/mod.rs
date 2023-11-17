@@ -27,8 +27,9 @@ pub mod tun;
 
 use std::collections::HashMap;
 use std::io::{self, Write as _};
-use std::mem::MaybeUninit;
+use std::mem::{ManuallyDrop, MaybeUninit};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
+use std::os::fd::{FromRawFd, IntoRawFd, RawFd};
 use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -441,8 +442,8 @@ impl Device {
         udp_sock6.bind(&SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, port, 0, 0).into())?;
         udp_sock6.set_nonblocking(true)?;
 
-        self.register_udp_handler(udp_sock4.try_clone().unwrap())?;
-        self.register_udp_handler(udp_sock6.try_clone().unwrap())?;
+        self.register_udp_handler(udp_sock4.as_raw_fd())?;
+        self.register_udp_handler(udp_sock6.as_raw_fd())?;
         self.udp4 = Some(udp_sock4);
         self.udp6 = Some(udp_sock6);
 
@@ -590,15 +591,18 @@ impl Device {
             .stop_notification(self.yield_notice.as_ref().unwrap())
     }
 
-    fn register_udp_handler(&self, udp: socket2::Socket) -> Result<(), Error> {
+    fn register_udp_handler(&self, udp: RawFd) -> Result<(), Error> {
         self.queue.new_event(
-            udp.as_raw_fd(),
+            udp,
             Box::new(move |d, t| {
                 // Handler that handles anonymous packets over UDP
                 let mut iter = MAX_ITR;
                 let (private_key, public_key) = d.key_pair.as_ref().expect("Key not set");
 
                 let rate_limiter = d.rate_limiter.as_ref().unwrap();
+
+                // Safety: the origin udp socket can drop currently, so there we just hold a reference
+                let udp = unsafe { ManuallyDrop::new(socket2::Socket::from_raw_fd(udp)) };
 
                 // Loop while we have packets on the anonymous connection
 
@@ -700,17 +704,20 @@ impl Device {
     fn register_conn_handler(
         &self,
         peer: Arc<Mutex<Peer>>,
-        udp: socket2::Socket,
+        udp: RawFd,
         peer_addr: IpAddr,
     ) -> Result<(), Error> {
         self.queue.new_event(
-            udp.as_raw_fd(),
+            udp,
             Box::new(move |_, t| {
                 // The conn_handler handles packet received from a connected UDP socket, associated
                 // with a known peer, this saves us the hustle of finding the right peer. If another
                 // peer gets the same ip, it will be ignored until the socket does not expire.
                 let iface = &t.iface;
                 let mut iter = MAX_ITR;
+
+                // Safety: the origin udp socket can drop currently, so there we just hold a reference
+                let udp = unsafe { ManuallyDrop::new(socket2::Socket::from_raw_fd(udp)) };
 
                 // Safety: the `recv_from` implementation promises not to write uninitialised
                 // bytes to the buffer, so this casting is safe.
