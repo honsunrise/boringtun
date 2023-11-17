@@ -14,6 +14,7 @@ use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::atomic::Ordering;
+use std::time::SystemTime;
 
 const SOCK_DIR: &str = "/var/run/wireguard/";
 
@@ -189,8 +190,20 @@ fn api_get(writer: &mut BufWriter<&UnixStream>, d: &Device) -> i32 {
         }
 
         if let Some(time) = p.time_since_last_handshake() {
-            writeln!(writer, "last_handshake_time_sec={}", time.as_secs());
-            writeln!(writer, "last_handshake_time_nsec={}", time.subsec_nanos());
+            let last_handshake_abs_time = SystemTime::now() - time;
+            let duration_since_unix_epoch = last_handshake_abs_time
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap_or_default();
+            writeln!(
+                writer,
+                "last_handshake_time_sec={}",
+                duration_since_unix_epoch.as_secs()
+            );
+            writeln!(
+                writer,
+                "last_handshake_time_nsec={}",
+                duration_since_unix_epoch.subsec_nanos()
+            );
         }
 
         let (_, tx_bytes, rx_bytes, ..) = p.tunnel.stats();
